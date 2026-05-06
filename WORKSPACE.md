@@ -33,18 +33,26 @@
    - `python -m compileall -q` —— 通过
    - `python -m unittest` 42 tests —— **全部通过，无回归**
 
-**Phase 2 — 前端导入按钮（已完成）**：
+**Phase 2 — 前端导入按钮（已完成，已按用户反馈重构）**：
 
+**第一版（已废弃）**：单个输入框 + 按钮，无条件显示，调用单条导入 API
+
+**第二版（当前，按用户"正常导入一样"的要求重构）**：
 1. 修改 `templates/index.html`：
-   - 在临时邮箱左侧面板输入区域下方新增导入输入框（`id="tempEmailImportInput"`）和「导入」按钮
-   - 样式复用现有 `form-input` 和 `btn btn-sm btn-primary`
-
+   - 替换单个输入框为 textarea + 分组选择下拉框 + 「批量导入」按钮
+   - 导入区域 `id="tempEmailImportSection"` 默认隐藏
+   - 仅当 Cloudflare Temp Mail 被选中时才显示
 2. 修改 `static/js/features/temp_emails.js`：
-   - 新增 `importTempEmail()` 异步函数
-   - 读取输入框值 → 调用 `POST /api/temp-emails/import` → 成功后清空输入框并刷新列表
-
+   - `onTempEmailProviderChange()` 增加显示/隐藏导入区域的逻辑
+   - 新增 `updateTempEmailImportGroupSelect()` 函数，从 groups 全局变量填充分组下拉
+   - `importTempEmail()` 改为批量处理：逐行解析 → 循环调用 API → 显示进度 → 汇总结果
 3. 修改 `static/js/i18n.js`：
-   - 补充 4 个中英词条：`请输入邮箱地址`、`正在导入…`、`导入成功`、`导入失败`
+   - 新增词条：`批量导入`、`导入邮箱`、`格式：每行一个邮箱地址，支持批量导入`、`导入完成`
+
+**设计决策**：
+- 参考了正常邮箱导入的 `modals.html` 结构（textarea + 分组选择 + 格式提示）
+- 分组选择复用 `groups` 全局变量，过滤掉「临时邮箱」虚拟分组
+- 导入区域仅在 `cloudflare_temp_mail` Provider 时显示，其他 Provider 隐藏
 
 **Phase 3 — 回归与验收（已完成）**：
 
@@ -71,10 +79,27 @@
 | `static/js/i18n.js` | 补充 4 个中英词条 | Phase 2 |
 
 **当前状态**：
-- Phase 1~3 全部完成
-- 代码未提交，等待用户确认是否提交
+- ✅ Phase 1（后端 API）
+- ✅ Phase 2（前端按钮）
+- ✅ Phase 3（回归 + 验收）
+- ✅ 代码已本地提交（未推送远程）
+- ✅ 本地服务已启动（http://127.0.0.1:5000）
 
-**是否改动代码**：是（共 5 个文件，未提交）
+**提交记录**：
+- Commit：`b9418e1`
+- 消息：`feat(issue58): Cloudflare Temp Mail 添加导入功能`
+- 文件：9 个（5 个代码/模板文件 + 3 个文档 + WORKSPACE.md）
+- 未推送远程
+
+**本地服务**：
+- 命令：`Start-Process python start.py`（后台进程）
+- PID：`27048`
+- 访问地址：`http://127.0.0.1:5000`
+- 健康检查：`GET http://127.0.0.1:5000/healthz` → `{"status":"ok","version":"2.4.0"}`
+- 日志：stdout / stderr 已重定向到 `$env:TEMP\opencode\outlook-issue58-start.*.log`
+- 注：此前一次启动因超时检测导致进程被误判未启动，已重启并确认端口监听正常
+
+**是否改动代码**：是（已本地提交）
 
 ---
 
