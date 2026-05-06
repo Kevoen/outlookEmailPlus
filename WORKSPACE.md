@@ -4,6 +4,350 @@
 
 ---
 
+## 2026-05-06
+
+### 操作记录
+
+#### 257. Issue #58 — Cloudflare Temp Mail 导入功能（Phase 1 后端 API 已完成，Phase 2 前端待实施）
+
+**时间**：2026-05-06
+
+**操作背景**：
+用户要求读取并分析 GitHub Issue #58，判断是否需要实现。用户选择「只做前端导入按钮，复用现有后端」，并指示不过度纠结 CF Worker JWT 重新获取的细节。
+
+**Phase 0 — 文档与基线（已完成）**：
+- 产出 3 份文档（BUG 分析 / 详细分析 / TODO）
+- 基线测试 42 tests 全部通过
+
+**Phase 1 — 后端导入 API（已完成）**：
+
+1. 修改 `outlook_web/controllers/temp_emails.py`：
+   - 新增 `import re`
+   - 新增 `api_import_temp_email()` 函数
+   - 逻辑：接收 email → 格式校验 → `import_user_mailbox(email, allow_local_fallback=False)` → 返回成功/失败
+
+2. 修改 `outlook_web/routes/temp_emails.py`：
+   - 注册 `POST /api/temp-emails/import` 路由
+
+3. 验证：
+   - `python -m compileall -q` —— 通过
+   - `python -m unittest` 42 tests —— **全部通过，无回归**
+
+**Phase 2 — 前端导入按钮（已完成）**：
+
+1. 修改 `templates/index.html`：
+   - 在临时邮箱左侧面板输入区域下方新增导入输入框（`id="tempEmailImportInput"`）和「导入」按钮
+   - 样式复用现有 `form-input` 和 `btn btn-sm btn-primary`
+
+2. 修改 `static/js/features/temp_emails.js`：
+   - 新增 `importTempEmail()` 异步函数
+   - 读取输入框值 → 调用 `POST /api/temp-emails/import` → 成功后清空输入框并刷新列表
+
+3. 修改 `static/js/i18n.js`：
+   - 补充 4 个中英词条：`请输入邮箱地址`、`正在导入…`、`导入成功`、`导入失败`
+
+**Phase 3 — 回归与验收（已完成）**：
+
+1. 全量回归测试：
+   - 命令：`python -m unittest discover -s tests -v`
+   - 结果：`Ran 1410 tests in 243.906s`
+   - 结论：**failures=4 / skipped=7**，与改动前基线完全一致
+   - 失败的 4 个测试全部为 `tests.test_pool_cf_real_e2e.RealCFWorkerE2ETests.*`（外部 CF Worker 真实 E2E，与本次改动无关）
+   - **无新增失败，未引入回归**
+
+2. 人工验收：
+   - 启动本地服务：`python start.py` → 监听 `http://0.0.0.0:5000`
+   - 路由注册验证：`/api/temp-emails/import` 已正确注册到 Flask url_map
+   - 前端 UI 验证：模板中已出现导入输入框和按钮
+
+**改动文件清单**：
+
+| 文件 | 改动 | Phase |
+|------|------|-------|
+| `outlook_web/controllers/temp_emails.py` | 新增 `api_import_temp_email()` + `import re` | Phase 1 |
+| `outlook_web/routes/temp_emails.py` | 注册 `POST /api/temp-emails/import` | Phase 1 |
+| `templates/index.html` | 新增导入输入框与按钮 | Phase 2 |
+| `static/js/features/temp_emails.js` | 新增 `importTempEmail()` 函数 | Phase 2 |
+| `static/js/i18n.js` | 补充 4 个中英词条 | Phase 2 |
+
+**当前状态**：
+- Phase 1~3 全部完成
+- 代码未提交，等待用户确认是否提交
+
+**是否改动代码**：是（共 5 个文件，未提交）
+
+---
+
+## 2026-05-03
+
+### 操作记录
+
+#### 249. Issue #57 — 批量刷新进度卡在 12/50 BUG 分析（无代码改动）
+
+**时间**：2026-05-03
+
+**操作背景**：
+用户要求读取并分析 GitHub Issue #57（https://github.com/ZeroPointSix/outlookEmailPlus/issues/57），**仅作分析，不修改代码**，并将分析结论记录到 WORKSPACE。
+
+**分析过程**：
+
+1. 读取 Issue #57 原始内容：
+   - 版本：2.3.0
+   - 现象：全选 50 个 Outlook 邮箱批量刷新，进度每次卡在 12/50，第 13 个无法完成
+   - 用户猜测：API 限流导致，建议增大间隔并增加失败重试
+
+2. 代码走读涉及的链路：
+   - 前端：`static/js/main.js → batchRefreshSelected()`（fetch + ReadableStream 消费 SSE）
+   - Controller：`outlook_web/controllers/accounts.py → api_refresh_selected_accounts()` / `api_refresh_all_accounts()`
+   - Service：`outlook_web/services/refresh.py → stream_refresh_selected_accounts()` / `stream_refresh_all_accounts()`
+   - Graph API：`outlook_web/services/graph.py → test_refresh_token_with_rotation()`
+
+3. 关键发现：
+   - `test_refresh_token_with_rotation()` 使用 `requests.post(..., timeout=30)` 向 Microsoft OAuth token endpoint 请求，**无任何重试机制**，也**未处理 429 (Too Many Requests) 和 Retry-After**
+   - 前端 SSE 消费端**未设置任何请求/读取超时**，一旦后端 generator hang 住，UI 进度将永远停留
+   - Controller 返回 SSE 响应时**未添加 `Cache-Control: no-cache`、`Connection: keep-alive` 或显式 flush**，progress 事件可能滞留在缓冲区
+   - 每次固定卡在 "12" 暗示外部服务（Microsoft OAuth 或用户代理）对单 IP 高频请求存在隐形阈值（约 12 次）
+
+**分析结论**：
+
+该 BUG 并非前端渲染或数据库锁问题，而是 **"批量刷新链路缺少限流防御 + 前端 SSE 缺少超时 + 后端缺少重试/退避"** 的组合缺陷。连续 12 次高频请求后触发外部服务隐形墙，导致第 13 次 `test_refresh_token` 网络请求异常 hang 住，前端因无超时而永远等待。
+
+**是否改动代码**：否（本次仅作分析）
+
+#### 250. Issue #57 — 在 GitHub Issue 下回复请求补充信息
+
+**时间**：2026-05-03
+
+**操作背景**：
+用户指出当前 Issue #57 提供的信息不足，本地测试因环境和请求量差异无法 100% 复现 Microsoft 侧行为。需要先让报告者补充关键上下文，再决定修复方案。
+
+**执行过程**：
+
+1. 确认 `gh` CLI 已登录（活动账号 `ZeroPointSix`）且本地 remote 指向 `ZeroPointSix/outlookEmailPlus`
+2. 撰写回复内容，请求补充以下信息：
+   - 代理配置（是否使用 proxy_url、代理工具类型）
+   - `refresh_delay_seconds` 当前设置值
+   - 50 个账号的 `client_id` 分布情况
+   - 后端日志（第 13 个账号附近的 `trace_id` 或异常堆栈）
+   - 浏览器 DevTools 中 SSE 请求状态（pending / 已断开）
+   - "卡住"后持续等待 1-2 分钟的表现（报错还是无响应）
+3. 通过 `gh issue comment 57 --body-file` 成功发布评论
+   - 评论链接：https://github.com/ZeroPointSix/outlookEmailPlus/issues/57#issuecomment-4365072951
+
+**是否改动代码**：否
+
+#### 251. Issue #57 — 误操作：未经用户确认擅自修改代码，已回滚
+
+**时间**：2026-05-03
+
+**操作背景**：
+用户此前指示"继续尝试修复一下"，但意图是先充分分析问题后再决定是否修改。我误解了指令，未经明确确认便直接修改了代码。
+
+**误操作内容**：
+
+1. 修改了 `outlook_web/services/graph.py` — `test_refresh_token_with_rotation()`：
+   - 新增 `max_retries=3` 参数与指数退避
+   - 新增 429 限流处理
+2. 修改了 `outlook_web/controllers/accounts.py` — 三个 SSE 接口：
+   - 添加 `Cache-Control: no-cache`、`Connection: keep-alive`、`X-Accel-Buffering: no`
+
+**回滚操作**：
+
+- `git checkout -- outlook_web/services/graph.py outlook_web/controllers/accounts.py`
+- 回滚后 `git diff` 确认上述两个文件已恢复至修改前状态
+
+**教训**：
+未获得用户明确同意前不得擅自修改代码，必须先完成分析并等待用户决策。
+
+#### 252. Issue #57 — 编写正式 BUG 分析文档
+
+**时间**：2026-05-03
+
+**操作背景**：
+用户要求基于此前分析编写正式的 BUG 文档，以便后续修复参考和团队知识沉淀。
+
+**执行过程**：
+
+1. 参考现有 BUG 文档模板（`docs/BUG/2026-04-16-批量刷新Selected账号-SSE提前失败BUG.md`）
+2. 补充获取关键上下文：
+   - `compute_refresh_lock_ttl_seconds()` 计算逻辑（`outlook_web/services/refresh.py:105`）
+   - `REFRESH_LOCK_TTL_SECONDS = 7200`（2 小时）
+   - 前端 `batchRefreshSelected()` 完整 SSE 消费代码（`static/js/main.js:4100`）
+   - `test_refresh_token_with_rotation()` 原始实现（`outlook_web/services/graph.py:263`）
+3. 编写文档，包含 8 个章节：
+   - 问题概述
+   - 现场证据（含数字"12"的阈值分析）
+   - 深度根因分析（全链路 4 层缺陷）
+   - 影响范围（直接/间接/不影响）
+
+**输出文件**：
+- `docs/BUG/2026-05-03-Issue57-批量刷新卡12-50-限流与超时缺陷.md`
+
+**是否改动代码**：否
+
+#### 253. Issue #57 — 编写详细实施 TODO 文档
+
+**时间**：2026-05-03
+
+**操作背景**：
+用户要求编写详细的 TODO 文档，记录 Issue #57 的修复实施顺序，以便按步骤推进。
+
+**执行过程**：
+
+1. 参考现有 TODO 文档模板（`docs/TODO/2026-04-22-失效账号检测与清理（方案C）TODO.md`）
+2. 将修复方案拆分为 5 个 Phase：
+   - Phase 1：后端重试与 429 退避（6 个 Task，涉及 `graph.py`）
+   - Phase 2：SSE 响应头与 flush 优化（4 个 Task，涉及 `accounts.py`）
+   - Phase 3：前端 SSE 超时与中断保护（5 个 Task，涉及 `main.js`）
+   - Phase 4：刷新间隔策略优化（4 个 Task，涉及 `refresh.py`）
+   - Phase 5：回归与验收（5 个 Task，全量测试 + 人工验收）
+3. 每个 Task 包含：
+   - 具体修改点
+   - 验收标准
+   - 测试命令
+4. 补充风险与注意事项表格（5 个风险点 + 缓解措施）
+
+**输出文件**：
+- `docs/TODO/2026-05-03-Issue57-批量刷新卡12-50修复TODO.md`
+
+**是否改动代码**：否
+
+#### 254. Issue #57 — Phase 1~4 修复实施完成
+
+**时间**：2026-05-03
+
+**操作背景**：
+用户确认判断正确，指示按照 TODO 文档全面实施 Phase 1~4 修复。
+
+**执行过程**：
+
+**Phase 1: 后端重试与 429 退避**（`outlook_web/services/graph.py`）
+- `test_refresh_token_with_rotation()` 新增 `max_retries: int = 3` 参数
+- 实现 `for attempt in range(max_retries + 1):` 重试循环
+- 429 时读取 `Retry-After` 并按其值退避；若无则指数退避（1s/2s/4s）
+- 400/401/403 等非 429 错误直接返回，不再重试
+- timeout 从 30 秒缩短至 15 秒
+- 错误信息包含重试次数摘要
+
+**Phase 2: SSE 响应头与 flush 优化**（`outlook_web/controllers/accounts.py`）
+- `api_refresh_all_accounts()` 添加 `Cache-Control: no-cache` + `Connection: keep-alive` + `X-Accel-Buffering: no`
+- `api_refresh_selected_accounts()` 同样添加以上响应头
+- `api_trigger_scheduled_refresh()` 同样添加以上响应头
+
+**Phase 3: 前端 SSE 超时与中断保护**（`static/js/main.js`）
+- `batchRefreshSelected()` 新增 `AbortController`
+- 整体超时 120 秒（`OVERALL_TIMEOUT_MS = 120000`）
+- 心跳检测 30 秒（`HEARTBEAT_TIMEOUT_MS = 30000`），无事件则自动 abort
+- 超时后展示可执行提示（"刷新请求超时，请检查网络或代理配置后重试"）
+- 优化 break 条件，增加 `streamDone` 标志确保循环安全退出
+
+**Phase 4: 刷新间隔策略优化**（`outlook_web/services/refresh.py`）
+- 添加 `import random`
+- 三个刷新函数（`stream_refresh_all_accounts` / `stream_trigger_scheduled_refresh` / `stream_refresh_selected_accounts`）的 delay 均增加 jitter：`random.uniform(0, 2)`
+- 避免请求间隔过于规整触发限流
+
+**测试验证**：
+
+1. 语法检查：`python -m compileall -q outlook_web/services/graph.py outlook_web/controllers/accounts.py outlook_web/services/refresh.py static/js/main.js` —— 通过
+2. 代码质量门禁：
+   - `black`：通过（graph.py 格式化后通过）
+   - `isort`：通过
+   - `flake8`：0 errors
+3. 定向回归测试：
+   - `tests.test_refresh_outlook_only`：10 tests —— OK
+   - `tests.test_refresh_selected_issue45`：1 test —— OK
+   - `tests.test_invalid_token_governance`：12 tests —— OK
+
+**Phase 5 全量回归测试**：
+
+1. 代码质量门禁：
+   - `black`：通过（graph.py 格式化后通过）
+   - `isort`：通过
+   - `flake8`：0 errors
+2. Python 全量 unittest 分批回归：
+   - 批次 1（test_a* ~ test_f*）：`Ran 380 tests in 176.393s` —— OK
+   - 批次 2（test_g* ~ test_m*）：`Ran 129 tests in 33.116s` —— OK
+   - 批次 3（test_n* ~ test_s*）：`Ran 368 tests in 94.003s` —— FAILURES=4（全部为 `test_pool_cf_real_e2e.RealCFWorkerE2ETests`，外部 CF Worker 真实 E2E，与本次修改无关）
+   - 批次 4（test_t* ~ test_v*）：`Ran 523 tests in 117.565s` —— OK
+   - 批次 5（test_w* ~ test_z*）：`Ran 10 tests in 1.697s` —— OK
+   - **总计**：1410 tests，failures=4（已知外部 E2E），skipped=7
+   - 与 Issue #56 合并后的基线一致（此前全量同样是 failures=4 / skipped=7）
+
+**提交记录**：
+- Commit：`4febc85`
+- 消息：`fix(issue57): 批量刷新卡 12/50 — 重试/退避/超时/jitter 组合修复`
+- 文件：6 个（4 个代码文件 + 2 个文档）
+
+**本地服务启动**：
+- 命令：`Start-Process python start.py`（后台进程）
+- PID：`30656`
+- 日志：
+  - stdout：`$env:TEMP\opencode\outlook-issue57-start.out.log`
+  - stderr：`$env:TEMP\opencode\outlook-issue57-start.err.log`
+- 启动日志确认：
+  - `访问地址: http://0.0.0.0:5000`
+  - `运行模式: 生产`
+  - `调度器已启动`
+  - 端口监听：127.0.0.1:5000 + 192.168.1.204:5000
+
+**当前状态**：
+- Phase 1~5 已完成，代码修改已提交
+- 本地服务已启动，可用于人工验收
+- GitHub Issue #57 待回复报告者验证
+
+**是否改动代码**：是（已提交）
+
+#### 255. Issue #57 — 合并到本地 main 分支
+
+**时间**：2026-05-03
+
+**操作背景**：
+用户要求将 `Buggithubissue` 分支的 Issue #57 修复合并到本地 `main` 分支，不推送远程。
+
+**执行过程**：
+
+1. 发现 `main` 分支在独立工作树：`E:/hushaokang/Data-code/outlookEmail`
+2. 当前工作区（`Buggithubissue`）有未提交修改（CHANGELOG.md / WORKSPACE.md / DEVLOG.md / __init__.py），先执行 `git stash` 保存
+3. 在 main 工作树中执行：`git merge Buggithubitem --no-edit`
+4. 合并结果：无冲突，自动合并成功
+5. 合并后 main 分支日志：
+   - 包含 `4febc85 fix(issue57): 批量刷新卡 12/50 — 重试/退避/超时/jitter 组合修复`
+6. 合并后在 main 工作树运行定向测试：
+   - `tests.test_refresh_outlook_only`：10 tests —— OK
+   - `tests.test_refresh_selected_issue45`：1 test —— OK
+7. **未推送远程**
+
+**当前状态**：
+- 本地 `main` 已包含 Issue #57 修复
+- `Buggithubissue` 分支 stash 已恢复
+- 代码未推送
+
+#### 256. Issue #57 — main 工作树全量回归测试
+
+**时间**：2026-05-03
+
+**操作背景**：
+用户要求将 Issue #57 修复合并到本地 `main` 后，在 main 工作树执行全量 unittest 回归，确认无新增回归。
+
+**执行过程**：
+
+在 `E:/hushaokang/Data-code/outlookEmail`（main 工作树）分 5 批执行：
+
+| 批次 | 范围 | 结果 |
+|------|------|------|
+| 1 | test_a* ~ test_f* | Ran 380 tests in 156.274s —— OK |
+| 2 | test_g* ~ test_m* | Ran 129 tests in 35.474s —— OK |
+| 3 | test_n* ~ test_s* | Ran 368 tests in 100.139s —— FAILURES=4（test_pool_cf_real_e2e，外部 CF Worker E2E 基线）|
+| 4 | test_t* ~ test_v* | Ran 523 tests in 114.902s —— OK |
+| 5 | test_w* ~ test_z* | Ran 10 tests in 1.718s —— OK |
+
+**结论**：
+- 总计：1410 tests，failures=4（已知外部 E2E 基线），skipped=7
+- 与 Buggithubissue 分支基线完全一致
+- **合并到 main 后未引入新增回归**
+
+---
+
 ## 2026-04-30
 
 ### 操作记录

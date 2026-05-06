@@ -368,6 +368,10 @@
                             </select>
                             <div id="tempEmailOptionsHint" class="form-hint" style="margin:0;">支持自定义前缀和多域名创建。</div>
                             <div id="tempEmailOptionsStatus" class="form-error" style="display:none;margin:0;"></div>
+                            <div style="display:flex;gap:8px;margin-top:4px;">
+                                <input type="text" class="form-input" id="tempEmailImportInput" placeholder="输入要导入的邮箱地址" style="flex:1;">
+                                <button class="btn btn-sm btn-primary" onclick="importTempEmail()">导入</button>
+                            </div>
                         </div>
                         <div class="column-body" id="tempEmailContainer">
                             <div class="empty-state">

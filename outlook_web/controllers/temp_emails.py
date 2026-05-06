@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from flask import jsonify, request
@@ -118,6 +119,49 @@ def api_generate_temp_email() -> Any:
             exc.message,
             status=exc.status,
             message_en="Failed to create temp mailbox. Please try again later",
+        )
+
+
+@login_required
+def api_import_temp_email() -> Any:
+    """导入已有临时邮箱"""
+    data = request.json or {}
+    email = str(data.get("email") or "").strip()
+
+    if not email:
+        return build_error_response(
+            "INVALID_PARAM",
+            "邮箱地址不能为空",
+            status=400,
+            message_en="Email address is required",
+        )
+
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return build_error_response(
+            "INVALID_PARAM",
+            "邮箱格式不正确",
+            status=400,
+            message_en="Invalid email format",
+        )
+
+    try:
+        mailbox = temp_mail_service.import_user_mailbox(email, allow_local_fallback=False)
+        log_audit("import", "temp_email", email, "导入临时邮箱")
+        return jsonify(
+            {
+                "success": True,
+                "email": mailbox["email"],
+                "message": "临时邮箱导入成功",
+                "message_en": "Temp mailbox imported successfully",
+            }
+        )
+    except TempMailError as exc:
+        logger.error(f"临时邮箱导入失败: {exc.message}, email={email}")
+        return build_error_response(
+            exc.code,
+            exc.message,
+            status=exc.status,
+            message_en="Failed to import temp mailbox",
         )
 
 

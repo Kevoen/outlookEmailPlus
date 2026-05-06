@@ -296,6 +296,39 @@
             }
         }
 
+        // 导入临时邮箱
+        async function importTempEmail() {
+            const input = document.getElementById('tempEmailImportInput');
+            const email = (input && input.value || '').trim();
+
+            if (!email) {
+                showToast(translateAppTextLocal('请输入邮箱地址'), 'warning');
+                return;
+            }
+
+            try {
+                showToast(translateAppTextLocal('正在导入…'), 'info');
+                const response = await fetch('/api/temp-emails/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast(data.message || translateAppTextLocal('导入成功'), 'success');
+                    if (input) input.value = '';
+                    delete accountsCache['temp'];
+                    loadTempEmails(true);
+                } else {
+                    handleApiError(data, translateAppTextLocal('导入失败'));
+                }
+            } catch (error) {
+                showToast(translateAppTextLocal('导入失败'), 'error');
+            }
+        }
+
         // 选择临时邮箱
         function selectTempEmail(email) {
             // BUG-05: 切换到临时邮箱前停止所有轮询，避免轮询把 currentAccount 误当作普通邮箱去拉取。

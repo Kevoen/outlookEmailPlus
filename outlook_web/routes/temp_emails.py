@@ -23,6 +23,11 @@ def create_blueprint(csrf_exempt=None) -> Blueprint:
             ["POST"],
         ),
         (
+            "/api/temp-emails/import",
+            temp_emails_controller.api_import_temp_email,
+            ["POST"],
+        ),
+        (
             "/api/temp-emails/<path:email_addr>/extract-verification",
             temp_emails_controller.api_extract_temp_email_verification,
             ["GET"],
