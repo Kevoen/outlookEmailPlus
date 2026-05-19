@@ -4,8 +4,8 @@ from typing import Any
 
 from flask import jsonify, request
 
-from outlook_web.services import pool_admin as pool_admin_svc
 from outlook_web.security.auth import login_required
+from outlook_web.services import pool_admin as pool_admin_svc
 
 
 @login_required
