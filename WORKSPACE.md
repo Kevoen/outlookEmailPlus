@@ -157,6 +157,47 @@ Phase 1 首屏降载完成后，继续执行 Phase 2 接口缓存与查询收敛
 
 ---
 
+#### 286D. Issue #69 — Phase 4 Scheduler 拆分设计完成
+
+**时间**：2026-05-22
+
+**操作背景**：
+Phase 3 gevent 评估结论为「建议跳过，优先拆 scheduler」。Phase 4 目标是形成完整的 scheduler 拆分设计方案，为后续多 worker 部署铺路。
+
+**获取上下文**：
+1. 复读 `services/scheduler.py` (598 行) — 确认全部 6 个 job 的具体实现
+2. 读取 `web_outlook_app.py` — 确认入口点 scheduler 启动路径
+3. 读取 `outlook_web/config.py` — 确认 `SCHEDULER_AUTOSTART` 配置
+4. 读取 `repositories/distributed_locks.py` — 确认已有跨进程协调机制
+5. 搜索所有模块级缓存/状态 — 评估多 worker 兼容性
+
+**设计方案核心**：
+
+| 项目 | 内容 |
+|------|------|
+| 6 个 Job | heartbeat / notification_dispatch / probe_poll / pool_expire / pool_recover / token_refresh |
+| 推荐方案 | 独立 Python 进程 (`scheduler_app.py`) + 双进程 start script |
+| 快速验证 | 方案 C：shell 脚本后台启动 scheduler |
+| 生产推荐 | 方案 A：supervisord 管理双进程 |
+| Web 侧变更 | `create_app(autostart_scheduler=False)` |
+| Scheduler 侧 | 独立进程，不绑定 WSGI，持有 app context |
+| 共享保护 | SQLite WAL + distributed_locks 天然跨进程 |
+| 多 worker | `gunicorn -w 2` 安全，无 scheduler 重复执行 |
+
+**文档产出**：
+- 新增 `docs/DEV/2026-05-22-Issue69-Scheduler拆分设计方案.md`（~350 行）
+- 包含：架构图、job 清单、3 个拆分方案对比、边界定义、多 worker 前置清单、迁移步骤、回滚方案
+
+**涉及文件**：
+- 新增：`scheduler_app.py` + `docker-entrypoint.sh`
+- 修改：`web_outlook_app.py` / `Dockerfile` / `services/scheduler.py` / `CLAUDE.md` / `TD.md`
+
+**是否修改业务代码**：否（仅设计文档）
+
+**是否启动/停止服务**：否
+
+---
+
 #### 286C. Issue #69 — Phase 3 gevent 兼容性评估完成
 
 **时间**：2026-05-22
